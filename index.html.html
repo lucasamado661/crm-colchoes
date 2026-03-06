@@ -688,6 +688,52 @@
             background-color: var(--secondary);
         }
 
+
+
+        .colchao-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .colchao-card {
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            background: #f8f9fa;
+        }
+
+        .colchao-card h4 {
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+
+        .colchao-card .qtd {
+            font-size: 1.4rem;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+
+        .colchao-card .valor {
+            color: #555;
+            font-size: 0.9rem;
+        }
+
+        .colchao-em-dia { border-left: 5px solid var(--success); }
+        .colchao-atencao { border-left: 5px solid var(--warning); }
+        .colchao-critico { border-left: 5px solid var(--danger); }
+
+        .colchao-lista {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .colchao-lista table {
+            width: 100%;
+        }
+
         .footer {
             background-color: var(--primary);
             color: white;
@@ -782,6 +828,7 @@
                 <div class="tab active" data-tab="acordos">📋 Lista de Acordos</div>
                 <div class="tab" data-tab="novo-acordo">➕ Novo Acordo</div>
                 <div class="tab" data-tab="clientes">👥 Clientes</div>
+                <div class="tab" data-tab="colchao">🛟 Colchão de Acordos</div>
                 <div class="tab" data-tab="importacao">📤 Importação em Massa</div>
             </div>
             
@@ -931,6 +978,28 @@
                     </thead>
                     <tbody></tbody>
                 </table>
+            </div>
+
+
+            <div class="tab-content" id="colchao">
+                <div class="info-box">
+                    <h4>🛟 Colchão de Acordos</h4>
+                    <p>Visão de risco da carteira por atraso de parcelas pendentes. Use para priorizar cobrança e renegociação.</p>
+                </div>
+                <div class="colchao-grid" id="colchao-resumo"></div>
+                <div class="colchao-lista">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Cliente</th>
+                                <th>Status de Risco</th>
+                                <th>Maior Atraso</th>
+                                <th>Valor Acordado</th>
+                            </tr>
+                        </thead>
+                        <tbody id="colchao-tabela"></tbody>
+                    </table>
+                </div>
             </div>
 
             <div class="tab-content" id="importacao">
@@ -1770,6 +1839,7 @@
                 this.carregarAcordos();
                 this.carregarClientes();
                 this.atualizarMetricas();
+                this.renderizarColchaoAcordos();
                 this.aplicarMascaras();
                 this.adicionarBusca();
                 this.importacaoManager.init();
@@ -1784,6 +1854,10 @@
                         tab.classList.add('active');
                         const tabId = tab.getAttribute('data-tab');
                         document.getElementById(tabId).classList.add('active');
+
+                        if (tabId === 'colchao') {
+                            this.renderizarColchaoAcordos();
+                        }
                     });
                 });
                 
@@ -2233,8 +2307,78 @@
                 document.getElementById('acordos-concluidos').textContent = acordos.filter(a => a.status === 'concluido').length;
                 document.getElementById('acordos-pendentes').textContent = acordos.filter(a => a.status === 'pendente').length;
                 document.getElementById('acordos-cancelados').textContent = acordos.filter(a => a.status === 'cancelado').length;
+                this.renderizarColchaoAcordos();
             }
             
+            obterMaiorAtraso(acordo) {
+                const hoje = new Date();
+                if (!acordo.parcelasDetalhes || acordo.parcelasDetalhes.length === 0) {
+                    const vencimento = new Date(acordo.dataVencimento + 'T00:00:00');
+                    const diffDias = Math.floor((hoje - vencimento) / (1000 * 60 * 60 * 24));
+                    return Math.max(diffDias, 0);
+                }
+
+                const atrasos = acordo.parcelasDetalhes
+                    .filter(parcela => parcela.status !== 'paga')
+                    .map(parcela => {
+                        const vencimento = new Date(parcela.dataVencimento + 'T00:00:00');
+                        return Math.floor((hoje - vencimento) / (1000 * 60 * 60 * 24));
+                    })
+                    .filter(dias => dias > 0);
+
+                return atrasos.length ? Math.max(...atrasos) : 0;
+            }
+
+            definirFaixaColchao(maiorAtraso) {
+                if (maiorAtraso <= 0) return 'em-dia';
+                if (maiorAtraso <= 30) return 'atencao';
+                return 'critico';
+            }
+
+            renderizarColchaoAcordos() {
+                const acordos = this.storage.getAcordos().filter(acordo => acordo.status !== 'cancelado' && acordo.status !== 'concluido');
+                const resumoEl = document.getElementById('colchao-resumo');
+                const tabelaEl = document.getElementById('colchao-tabela');
+
+                if (!resumoEl || !tabelaEl) return;
+
+                const grupos = {
+                    'em-dia': { titulo: '✅ Em dia', qtd: 0, valor: 0, classe: 'colchao-em-dia' },
+                    'atencao': { titulo: '⚠️ Atenção (1-30 dias)', qtd: 0, valor: 0, classe: 'colchao-atencao' },
+                    'critico': { titulo: '🚨 Crítico (+30 dias)', qtd: 0, valor: 0, classe: 'colchao-critico' }
+                };
+
+                const linhas = acordos.map(acordo => {
+                    const maiorAtraso = this.obterMaiorAtraso(acordo);
+                    const faixa = this.definirFaixaColchao(maiorAtraso);
+                    grupos[faixa].qtd += 1;
+                    grupos[faixa].valor += acordo.valorAcordado;
+
+                    return { acordo, maiorAtraso, faixa };
+                }).sort((a, b) => b.maiorAtraso - a.maiorAtraso);
+
+                resumoEl.innerHTML = Object.values(grupos).map(grupo => `
+                    <div class="colchao-card ${grupo.classe}">
+                        <h4>${grupo.titulo}</h4>
+                        <div class="qtd">${grupo.qtd} acordos</div>
+                        <div class="valor">${grupo.valor.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</div>
+                    </div>
+                `).join('');
+
+                tabelaEl.innerHTML = linhas.length ? linhas.map(({ acordo, maiorAtraso, faixa }) => {
+                    const risco = faixa === 'em-dia' ? 'Em dia' : faixa === 'atencao' ? 'Atenção' : 'Crítico';
+                    const atraso = maiorAtraso > 0 ? `${maiorAtraso} dias` : 'Sem atraso';
+                    return `
+                        <tr>
+                            <td>${acordo.clienteNome}</td>
+                            <td>${risco}</td>
+                            <td>${atraso}</td>
+                            <td>${acordo.valorAcordado.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</td>
+                        </tr>
+                    `;
+                }).join('') : '<tr><td colspan="4">Nenhum acordo ativo para análise.</td></tr>';
+            }
+
             novoAcordo() {
                 document.getElementById('form-acordo').reset();
                 document.getElementById('acordo-id').value = '';
